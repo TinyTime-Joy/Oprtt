@@ -1,5 +1,4 @@
 import android.databinding.tool.ext.capitalizeUS
-import groovy.json.JsonBuilder
 import org.apache.commons.codec.binary.Hex
 import org.apache.tools.ant.filters.FixCrLfFilter
 import org.apache.tools.ant.filters.ReplaceTokens
@@ -28,31 +27,15 @@ fun String.execute(currentWorkingDir: File = file("./")): String {
 
 val commitCount = "git rev-list HEAD --count".execute().toInt()
 val commitHash = "git rev-parse --verify --short HEAD".execute()
-val tag = try {
-    "git describe --tags --abbrev=0".execute()
-} catch (e: Exception) {
-    println("Failed to get tag: $e")
-    "ci"
-}
-val remoteUrl = "git remote get-url origin".execute()
-var gitHubUser = "NKU100"
-var gitHubRepo = "zygisk-module-webui-template"
-try {
-    val regex = Regex("""(?:https://github\\.com/|git@github\\.com:)([^/]+)/([^/]+?)(?:\\.git)?$""")
-    val matchResult = regex.find(remoteUrl)
-    if (matchResult != null) {
-        gitHubUser = matchResult.groupValues[1]
-        gitHubRepo = matchResult.groupValues[2]
-    }
-} catch (_: Exception) {
-    println("Failed to parse remote url: $remoteUrl")
-}
 
 val moduleId: String by rootProject.extra
 val moduleName: String by rootProject.extra
 val moduleAuthor: String by rootProject.extra
 val moduleDesc: String by rootProject.extra
 val moduleLibName: String by rootProject.extra
+val moduleUpdateJson: String by rootProject.extra
+val moduleVersion: String by rootProject.extra
+val moduleVersionCode: Int by rootProject.extra
 val abiList: List<String> by rootProject.extra
 
 android {
@@ -69,7 +52,7 @@ android {
             cmake {
                 cppFlags("-std=c++20")
                 arguments(
-                    "-DANDROID_STL=none", "-DMODULE_NAME=$moduleLibName"
+                    "-DANDROID_STL=c++_static", "-DMODULE_NAME=$moduleLibName"
                 )
             }
         }
@@ -102,9 +85,8 @@ androidComponents.onVariants { variant ->
         }
 
         val moduleDir = layout.buildDirectory.file("outputs/module/$variantLowered")
-        val zipFileName = "$moduleName-$tag-$commitCount-$commitHash-$buildTypeLowered.zip".replace(' ', '-')
-        val versionName = "$tag ($commitCount-$commitHash-$variantLowered)"
-        val versionCode = commitCount
+        val zipFileName = "$moduleName-$moduleVersion-$buildTypeLowered.zip".replace(' ', '-')
+        val versionName = "$moduleVersion ($commitCount-$commitHash-$variantLowered)"
 
         val prepareModuleFilesTask = tasks.register<Sync>("prepareModuleFiles$variantCapped") {
             group = "module"
@@ -118,17 +100,16 @@ androidComponents.onVariants { variant ->
                 exclude("module.prop", "customize.sh", "post-fs-data.sh", "service.sh")
                 filter<FixCrLfFilter>("eol" to FixCrLfFilter.CrLf.newInstance("lf"))
             }
-            val updateJson = "https://github.com/$gitHubUser/$gitHubRepo/releases/download/$tag/update.json"
             from(layout.projectDirectory.file("template")) {
                 include("module.prop")
                 expand(
                     "moduleId" to moduleId,
                     "moduleName" to moduleName,
                     "versionName" to versionName,
-                    "versionCode" to versionCode,
+                    "versionCode" to moduleVersionCode,
                     "moduleAuthor" to moduleAuthor,
                     "moduleDesc" to moduleDesc,
-                    "updateJson" to updateJson,
+                    "updateJson" to moduleUpdateJson,
                 )
             }
             from(layout.projectDirectory.file("template")) {
@@ -167,22 +148,6 @@ androidComponents.onVariants { variant ->
             archiveFileName.set(zipFileName)
             destinationDirectory.set(layout.projectDirectory.file("release").asFile)
             from(moduleDir)
-        }
-
-        tasks.register("ci$variantCapped") {
-            group = "module"
-            dependsOn(zipTask)
-
-            doLast {
-                val updateJsonFile = layout.projectDirectory.file("release/update.json").asFile
-                val jsonContent = mapOf(
-                    "version" to versionName,
-                    "versionCode" to versionCode,
-                    "zipUrl" to "https://github.com/$gitHubUser/$gitHubRepo/releases/download/$tag/$zipFileName",
-                    "changelog" to "https://github.com/$gitHubUser/$gitHubRepo/releases/download/$tag/changelog.md"
-                )
-                updateJsonFile.writeText(JsonBuilder(jsonContent).toPrettyString())
-            }
         }
 
         val pushTask = tasks.register<Exec>("push$variantCapped") {
